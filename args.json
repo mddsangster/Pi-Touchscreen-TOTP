@@ -1,0 +1,9 @@
+{
+  "watch": true,
+  "poll_interval": 1.0,
+  "pygame_enabled": true,
+  "desktop_mode": false,
+  "display_rotation": 0,
+  "ntp_server": "pool.ntp.org",
+  "ntp_timeout": 5.0
+}
