@@ -237,29 +237,14 @@ def init_pygame_display(width: int = 480, height: int = 320, desktop: bool = Fal
         f"Unable to initialize pygame display with drivers {drivers}: {last_exc}"
     )
 
-ACCOUNTS = [
-    {
-        "name": "Deloitte (O365)",
-        "secret_name": "deloitte_o365",
-        "digits": 6,
-        "step": 30,
-        "colour": "#FF0000",
-    },
-    {
-        "name": "Deloitte (ATRAME)",
-        "secret_name": "deloitte_atrame",
-        "digits": 6,
-        "step": 30,
-        "colour": "#00FF00",
-    },
-]
+ACCOUNTS_KEY = "accounts"
 
 
 def load_secrets(path: Path) -> dict:
     if not path.exists():
         raise SystemExit(
             f"Missing secrets file: {path.resolve()}\n"
-            "Create a secrets.json file with the shared OTP secrets for each account."
+            "Create a secrets.json file based on secrets.json.example."
         )
 
     try:
@@ -271,7 +256,7 @@ def load_secrets(path: Path) -> dict:
 
     if not isinstance(data, dict):
         raise SystemExit(
-            f"Expected {path.resolve()} to contain a JSON object mapping secret names to values."
+            f"Expected {path.resolve()} to contain a JSON object."
         )
 
     return data
@@ -286,8 +271,14 @@ def get_secret(secrets: dict, secret_name: str) -> str | None:
 
 def build_codes() -> list[dict]:
     secrets = load_secrets(SECRETS_FILE)
+    accounts = secrets.get(ACCOUNTS_KEY)
+    if not accounts or not isinstance(accounts, list):
+        raise SystemExit(
+            f"No 'accounts' list found in {SECRETS_FILE.resolve()}.\n"
+            "See secrets.json.example for the expected format."
+        )
     codes = []
-    for account in ACCOUNTS:
+    for account in accounts:
         secret = get_secret(secrets, account["secret_name"])
         if secret is None:
             print(f"SKIP: {account['name']} (no secret configured)")
@@ -296,13 +287,12 @@ def build_codes() -> list[dict]:
             {
                 "name": account["name"],
                 "key": secret,
-                "digits": account["digits"],
-                "step": account["step"],
-                "colour": account["colour"],
+                "digits": account.get("digits", 6),
+                "step": account.get("step", 30),
+                "colour": account.get("colour", "#FFFFFF"),
             }
         )
     return codes
-
 
 
 def write_codes_json(path: Path, data):

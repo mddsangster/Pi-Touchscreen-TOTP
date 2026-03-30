@@ -3,3 +3,4 @@ codes.json
 __pycache__/
 .venv/
 *.pyc
+args.config.json
