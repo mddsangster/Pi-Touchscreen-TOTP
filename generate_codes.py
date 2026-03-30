@@ -184,7 +184,9 @@ def _draw_single_line_text(
 def _try_pygame_display(width: int, height: int):
     pygame.quit()
     pygame.init()
-    return pygame.display.set_mode((width, height))
+    screen = pygame.display.set_mode((width, height))
+    pygame.mouse.set_visible(False)
+    return screen
 
 
 def load_config() -> dict:
