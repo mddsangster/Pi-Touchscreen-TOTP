@@ -2,9 +2,9 @@ import argparse
 import json
 import os
 import sys
-import textwrap
 import time
 from pathlib import Path
+from typing import Any
 
 try:
     import onetimepass as otp
@@ -14,24 +14,26 @@ except ImportError as exc:
     ) from exc
 
 try:
-    import pygame
+    import pygame as pygame_module
 except ImportError:
-    pygame = None
+    pygame_module = None
+
+pygame: Any = pygame_module
 
 try:
-    from synchronized_time import (
-        TimeSyncError,
-        get_synchronised_clock,
-        get_ntp_time,
-    )
+    from synchronized_time import get_ntp_time
 except ImportError:
-    TimeSyncError = None
-    get_synchronised_clock = None
     get_ntp_time = None
 
 SECRETS_FILE = Path("secrets.json")
 OUTPUT_FILE = Path("codes.json")
 CONFIG_FILE = Path("args.json")
+MENU_WIDTH = 360
+MENU_MARGIN = 30
+MENU_HEIGHT = 214
+MENU_ROTATE_TOP = 67
+MENU_DISMISS_TOP = 115
+MENU_EXIT_TOP = 163
 
 _current_clock = time.time
 
@@ -68,13 +70,17 @@ def sync_time(server: str = "pool.ntp.org", timeout: float = 5.0) -> bool:
 
 
 class PygameDisplay:
-    def __init__(self, width: int, height: int, surface: "pygame.Surface", rotation: int = 0):
+    def __init__(self, width: int, height: int, surface: Any, rotation: int = 0):
+        self._screen = surface
+        self._base_width = width
+        self._base_height = height
+        self._rotation = 0
         self._width = width
         self._height = height
         self._surface = surface
-        self._rotation = rotation % 360
         self._color = (255, 255, 255)
         self._bg_color = (0, 0, 0)
+        self.set_rotation(rotation)
 
     def get_width(self) -> int:
         return self._width
@@ -88,26 +94,41 @@ class PygameDisplay:
     def clear(self) -> None:
         self._surface.fill(self._bg_color)
 
-    def text(self, text: str, x: int, y: int, max_width: int, scale: int) -> None:
-        if pygame is None:
-            return
-        font_size = max(12, 10 * scale)
-        font = pygame.font.Font(None, font_size)
-        wrap_width = 20 if scale <= 2 else 15
-        lines = textwrap.wrap(text, width=wrap_width)
-        for line in lines:
-            surface = font.render(line, True, self._color)
-            self._surface.blit(surface, (x, y))
-            y += surface.get_height() + 2
-
     def update(self) -> None:
+        if self._rotation == 0:
+            pygame.display.flip()
+            return
+
+        rotated = pygame.transform.rotate(self._surface, self._rotation)
+        screen_width, screen_height = self._screen.get_size()
+        if rotated.get_size() != (screen_width, screen_height):
+            rotated = pygame.transform.scale(rotated, (screen_width, screen_height))
+        self._screen.blit(rotated, (0, 0))
         pygame.display.flip()
 
-    def get_surface(self):
+    def get_surface(self) -> Any:
         return self._surface
+
+    def get_screen_size(self) -> tuple[int, int]:
+        return self._screen.get_size()
 
     def get_rotation(self) -> int:
         return self._rotation
+
+    def set_rotation(self, rotation: int) -> None:
+        self._rotation = rotation % 360
+        if self._rotation in (90, 270):
+            self._width = self._base_height
+            self._height = self._base_width
+        else:
+            self._width = self._base_width
+            self._height = self._base_height
+
+        if self._rotation == 0:
+            self._surface = self._screen
+        else:
+            self._surface = pygame.Surface((self._width, self._height)).convert()
+        self.clear()
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -170,10 +191,25 @@ def load_config() -> dict:
     if not CONFIG_FILE.exists():
         return {}
     try:
-        return json.loads(CONFIG_FILE.read_text())
+        config = json.loads(CONFIG_FILE.read_text())
     except (json.JSONDecodeError, OSError) as exc:
         print(f"Warning: Could not load {CONFIG_FILE}: {exc}")
         return {}
+    if not isinstance(config, dict):
+        print(f"Warning: Expected {CONFIG_FILE} to contain a JSON object")
+        return {}
+    return config
+
+
+def save_config(config: dict) -> None:
+    CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+
+
+def save_display_rotation(rotation: int) -> None:
+    config = load_config()
+    config["display_rotation"] = rotation % 360
+    save_config(config)
+    print(f"Saved display_rotation={rotation % 360} to {CONFIG_FILE.resolve()}")
 
 
 def init_pygame_display(width: int = 480, height: int = 320, desktop: bool = False, rotation: int = 0):
@@ -296,13 +332,24 @@ def build_codes() -> list[dict]:
 
 
 def write_codes_json(path: Path, data):
-    path.write_text(json.dumps(data, indent=2))
+    path.write_text(json.dumps(data, indent=2) + "\n")
     print(f"Wrote {path.resolve()}")
 
 
-def _draw_touch_menu_overlay(display) -> tuple["pygame.Rect", "pygame.Rect", "pygame.Rect"] | None:
+def _get_menu_layout(width: int, height: int) -> tuple[Any, Any, Any, Any]:
+    menu_width = min(MENU_WIDTH, width - MENU_MARGIN)
+    menu_x = (width - menu_width) // 2
+    menu_y = (height - MENU_HEIGHT) // 2
+    menu_rect = pygame.Rect(menu_x, menu_y, menu_width, MENU_HEIGHT)
+    rotate_rect = pygame.Rect(menu_x + 20, menu_y + MENU_ROTATE_TOP, menu_width - 40, 40)
+    dismiss_rect = pygame.Rect(menu_x + 20, menu_y + MENU_DISMISS_TOP, menu_width - 40, 40)
+    exit_rect = pygame.Rect(menu_x + 20, menu_y + MENU_EXIT_TOP, menu_width - 40, 34)
+    return menu_rect, rotate_rect, dismiss_rect, exit_rect
+
+
+def _draw_touch_menu_overlay(display) -> None:
     if pygame is None:
-        return None
+        return
 
     surface = display.get_surface()
     width = display.get_width()
@@ -313,11 +360,9 @@ def _draw_touch_menu_overlay(display) -> tuple["pygame.Rect", "pygame.Rect", "py
     dim.fill((0, 0, 0, 170))
     surface.blit(dim, (0, 0))
 
-    menu_w = min(360, width - 30)
-    menu_h = 170
-    menu_x = (width - menu_w) // 2
-    menu_y = (height - menu_h) // 2
-    menu_rect = pygame.Rect(menu_x, menu_y, menu_w, menu_h)
+    menu_rect, rotate_rect, dismiss_rect, exit_rect = _get_menu_layout(width, height)
+    menu_x = menu_rect.x
+    menu_y = menu_rect.y
 
     pygame.draw.rect(surface, (30, 30, 30), menu_rect, border_radius=10)
     pygame.draw.rect(surface, (220, 220, 220), menu_rect, width=2, border_radius=10)
@@ -328,20 +373,19 @@ def _draw_touch_menu_overlay(display) -> tuple["pygame.Rect", "pygame.Rect", "py
     title_surface = font_title.render("Menu", True, (255, 255, 255))
     surface.blit(title_surface, (menu_x + 20, menu_y + 15))
 
-    exit_rect = pygame.Rect(menu_x + 20, menu_y + 75, menu_w - 40, 42)
-    dismiss_rect = pygame.Rect(menu_x + 20, menu_y + 123, menu_w - 40, 32)
-
-    pygame.draw.rect(surface, (170, 40, 40), exit_rect, border_radius=8)
+    pygame.draw.rect(surface, (60, 90, 180), rotate_rect, border_radius=8)
     pygame.draw.rect(surface, (50, 120, 60), dismiss_rect, border_radius=8)
+    pygame.draw.rect(surface, (170, 40, 40), exit_rect, border_radius=8)
 
+    rotate_text = font_button.render("Rotate Screen", True, (255, 255, 255))
     exit_text = font_button.render("Exit Program", True, (255, 255, 255))
     dismiss_text = font_button.render("Dismiss", True, (255, 255, 255))
 
     surface.blit(
-        exit_text,
+        rotate_text,
         (
-            exit_rect.centerx - exit_text.get_width() // 2,
-            exit_rect.centery - exit_text.get_height() // 2,
+            rotate_rect.centerx - rotate_text.get_width() // 2,
+            rotate_rect.centery - rotate_text.get_height() // 2,
         ),
     )
     surface.blit(
@@ -351,35 +395,56 @@ def _draw_touch_menu_overlay(display) -> tuple["pygame.Rect", "pygame.Rect", "py
             dismiss_rect.centery - dismiss_text.get_height() // 2,
         ),
     )
+    surface.blit(
+        exit_text,
+        (
+            exit_rect.centerx - exit_text.get_width() // 2,
+            exit_rect.centery - exit_text.get_height() // 2,
+        ),
+    )
 
-    return menu_rect, exit_rect, dismiss_rect
+
+def _map_physical_to_logical(display, x: int, y: int) -> tuple[int, int]:
+    rotation = display.get_rotation()
+    logical_width = display.get_width()
+    logical_height = display.get_height()
+    screen_width, screen_height = display.get_screen_size()
+
+    x = max(0, min(screen_width - 1, x))
+    y = max(0, min(screen_height - 1, y))
+
+    if rotation == 90:
+        return logical_width - 1 - y, x
+    if rotation == 180:
+        return logical_width - 1 - x, logical_height - 1 - y
+    if rotation == 270:
+        return y, logical_height - 1 - x
+    return x, y
 
 
-def _event_to_pixel_pos(event, width: int, height: int) -> tuple[int, int] | None:
+def _event_to_pixel_pos(display, event) -> tuple[int, int] | None:
     if pygame is None:
         return None
 
     if event.type == pygame.MOUSEBUTTONDOWN:
-        return int(event.pos[0]), int(event.pos[1])
+        return _map_physical_to_logical(display, int(event.pos[0]), int(event.pos[1]))
 
     if hasattr(pygame, "FINGERDOWN") and event.type == pygame.FINGERDOWN:
-        x = int(max(0.0, min(1.0, float(event.x))) * width)
-        y = int(max(0.0, min(1.0, float(event.y))) * height)
-        return x, y
+        screen_width, screen_height = display.get_screen_size()
+        x = int(max(0.0, min(1.0, float(event.x))) * screen_width)
+        y = int(max(0.0, min(1.0, float(event.y))) * screen_height)
+        return _map_physical_to_logical(display, x, y)
 
     return None
 
 
 def _handle_touch_menu_events(display, menu_visible: bool):
     if pygame is None or display is None:
-        return menu_visible, False
+        return menu_visible, False, None
 
     width = display.get_width()
     height = display.get_height()
-
-    menu_rect = pygame.Rect((width - min(360, width - 30)) // 2, (height - 170) // 2, min(360, width - 30), 170)
-    exit_rect = pygame.Rect(menu_rect.x + 20, menu_rect.y + 75, menu_rect.width - 40, 42)
-    dismiss_rect = pygame.Rect(menu_rect.x + 20, menu_rect.y + 123, menu_rect.width - 40, 32)
+    menu_rect, rotate_rect, dismiss_rect, exit_rect = _get_menu_layout(width, height)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -388,23 +453,25 @@ def _handle_touch_menu_events(display, menu_visible: bool):
         if event.type == pygame.MOUSEBUTTONDOWN or (
             hasattr(pygame, "FINGERDOWN") and event.type == pygame.FINGERDOWN
         ):
-            point = _event_to_pixel_pos(event, width, height)
+            point = _event_to_pixel_pos(display, event)
             if point is None:
                 continue
 
             if not menu_visible:
                 # First touch opens the menu.
-                return True, True
+                return True, True, None
 
             # Touch while menu is open: button actions or tap-away dismissal.
+            if rotate_rect.collidepoint(point):
+                return False, True, "rotate"
             if exit_rect.collidepoint(point):
                 raise SystemExit("Exit requested from touch menu")
             if dismiss_rect.collidepoint(point):
-                return False, True
+                return False, True, None
             if not menu_rect.collidepoint(point):
-                return False, True
+                return False, True, None
 
-    return menu_visible, False
+    return menu_visible, False, None
 
 
 def render_codes(
@@ -565,6 +632,12 @@ def generate_totps(data, now: float | None = None):
     ]
 
 
+def _rotate_display(display) -> None:
+    next_rotation = (display.get_rotation() + 90) % 360
+    display.set_rotation(next_rotation)
+    save_display_rotation(next_rotation)
+
+
 def watch_codes(poll_interval: float = 1.0, display=None) -> None:
     codes = build_codes()
     if not codes:
@@ -578,7 +651,11 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
     refresh_interval = min(item["step"] for item in codes)
     print("Watching TOTP codes. Press Ctrl+C to stop.")
     while True:
-        menu_visible, menu_changed = _handle_touch_menu_events(display, menu_visible)
+        menu_visible, menu_changed, menu_action = _handle_touch_menu_events(display, menu_visible)
+
+        if menu_action == "rotate" and display is not None:
+            _rotate_display(display)
+            menu_changed = True
 
         now = current_time()
         next_refresh = min(seconds_until_next_step(item["step"], now) for item in codes)
@@ -647,7 +724,7 @@ if __name__ == "__main__":
     config = load_config()
     print(f"Loaded config from {CONFIG_FILE}")
 
-    parser = argparse.ArgumentParser(description="Generate and optionally watch TOTP codes for Deloitte accounts.")
+    parser = argparse.ArgumentParser(description="Generate and optionally watch TOTP codes for configured accounts.")
     parser.add_argument(
         "--watch",
         action="store_true",

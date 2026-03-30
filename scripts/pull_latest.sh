@@ -4,7 +4,8 @@ set -euo pipefail
 BRANCH="${1:-main}"
 REMOTE="${2:-origin}"
 GIT_USER="${3:-}"
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SERVICE_NAME="${OTP_SERVICE_NAME:-otp-codes.service}"
 
 cd "$PROJECT_DIR"

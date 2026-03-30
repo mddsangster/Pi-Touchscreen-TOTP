@@ -1,16 +1,18 @@
 # OTP Display Project
 
-A Raspberry Pi Zero project that generates TOTP codes for Deloitte accounts and displays them on a GPIO-connected 3.5" touchscreen using pygame.
+A Raspberry Pi Zero project that generates TOTP codes for configured accounts and displays them on a GPIO-connected 3.5" touchscreen using pygame.
 
 ## Files
 
 - `generate_codes.py` - main script that loads secrets, generates TOTP codes, and optionally renders them to the display.
 - `synchronized_time.py` - optional NTP time sync helper plus manual fallback UI.
 - `secrets.json.example` - template for storing the base32 shared secrets.
-- `install_python_packages.sh` - installs required Python packages from apt.
+- `scripts/install_python_packages.sh` - installs required Python packages from apt.
 - `install_startup.sh` - installs the systemd service and runs package installation once.
-- `pull_latest.sh` - safely pulls latest git changes and restarts the OTP service when updated.
-- `install_autopull.sh` - installs a systemd timer for hands-off Pi auto-pull.
+- `scripts/pull_latest.sh` - safely pulls latest git changes and restarts the OTP service when updated.
+- `scripts/install_autopull.sh` - installs a systemd timer for hands-off Pi auto-pull.
+- `scripts/autosync.ps1` - Windows helper that commits and pushes local changes.
+- `scripts/test_rotation.py` - manual pygame rotation test utility.
 
 ## Setup
 
@@ -27,7 +29,7 @@ pip install -r requirements.txt
 4. Make the install scripts executable:
 
 ```bash
-chmod +x install_python_packages.sh install_startup.sh pull_latest.sh install_autopull.sh
+chmod +x install_startup.sh scripts/install_python_packages.sh scripts/pull_latest.sh scripts/install_autopull.sh
 ```
 
 5. Run the startup installer as root:
@@ -46,7 +48,7 @@ This will:
 Install the auto-pull timer so the Pi fetches from GitHub automatically:
 
 ```bash
-sudo ./install_autopull.sh main origin 1min
+sudo ./scripts/install_autopull.sh main origin 1min
 ```
 
 This creates:

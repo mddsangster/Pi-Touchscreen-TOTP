@@ -4,7 +4,7 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "This script must be run as root. Use sudo ./install_python_packages.sh"
+  echo "This script must be run as root. Use sudo ./scripts/install_python_packages.sh"
   exit 1
 fi
 

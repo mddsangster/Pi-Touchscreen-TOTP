@@ -2,17 +2,18 @@
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "This script must be run as root. Use sudo ./install_autopull.sh"
+  echo "This script must be run as root. Use sudo ./scripts/install_autopull.sh"
   exit 1
 fi
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SERVICE_NAME="otp-autopull.service"
 TIMER_NAME="otp-autopull.timer"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 TIMER_PATH="/etc/systemd/system/${TIMER_NAME}"
-AUTOPULL_SCRIPT="$PROJECT_DIR/pull_latest.sh"
-SYNC_USER="${SUDO_USER:-starscream}"
+AUTOPULL_SCRIPT="$PROJECT_DIR/scripts/pull_latest.sh"
+SYNC_USER="${SUDO_USER:-$(stat -c '%U' "$PROJECT_DIR")}"
 BRANCH="${1:-main}"
 REMOTE="${2:-origin}"
 INTERVAL="${3:-1min}"

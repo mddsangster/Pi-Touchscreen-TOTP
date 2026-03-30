@@ -9,7 +9,7 @@ fi
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_NAME="otp-codes.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
-PYTHON_INSTALL_SCRIPT="$PROJECT_DIR/install_python_packages.sh"
+PYTHON_INSTALL_SCRIPT="$PROJECT_DIR/scripts/install_python_packages.sh"
 SERVICE_USER="${SUDO_USER:-root}"
 
 if [ -f "$PYTHON_INSTALL_SCRIPT" ]; then
