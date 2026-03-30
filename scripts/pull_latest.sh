@@ -17,7 +17,11 @@ fi
 
 git_cmd() {
   if [ -n "$GIT_USER" ] && [ "$(id -u)" -eq 0 ]; then
-    runuser -u "$GIT_USER" -- git "$@"
+    local git_command
+    local project_dir_quoted
+    printf -v git_command '%q ' git "$@"
+    printf -v project_dir_quoted '%q' "$PROJECT_DIR"
+    runuser -l "$GIT_USER" -c "cd $project_dir_quoted && ${git_command% }"
   else
     git "$@"
   fi
