@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import json
 import os
 import shutil
@@ -39,11 +40,12 @@ DEFAULT_COLOURS = ["#E74C3C", "#3498DB", "#2ECC71", "#F1C40F"]
 
 MAIN_MENU_WIDTH = 360
 MAIN_MENU_MARGIN = 30
-MAIN_MENU_HEIGHT = 258
+MAIN_MENU_HEIGHT = 320
 MAIN_MENU_ADD_TOP = 67
 MAIN_MENU_ROTATE_TOP = 115
-MAIN_MENU_DISMISS_TOP = 163
-MAIN_MENU_EXIT_TOP = 211
+MAIN_MENU_BATTERY_TOP = 163
+MAIN_MENU_DISMISS_TOP = 211
+MAIN_MENU_EXIT_TOP = 259
 
 SECONDARY_MENU_WIDTH = 390
 SECONDARY_MENU_MARGIN = 30
@@ -299,6 +301,49 @@ def save_display_rotation(rotation: int) -> None:
     print(f"Saved display_rotation={rotation % 360} to {CONFIG_FILE.resolve()}")
 
 
+def _is_battery_saver_scheduled_active() -> bool:
+    """Check if current time falls within scheduled battery saver hours (6pm-6am M-F, all day Sat-Sun)."""
+    now = datetime.datetime.now()
+    weekday = now.weekday()  # 0=Monday, 6=Sunday
+    hour = now.hour
+    
+    # Saturday (5) and Sunday (6): always active
+    if weekday in (5, 6):
+        return True
+    
+    # Monday-Friday: 18:00 (6pm) to 06:00 (6am)
+    if weekday < 5:
+        if hour >= 18 or hour < 6:
+            return True
+    
+    return False
+
+
+def _set_battery_saver_scheduled(enabled: bool) -> None:
+    """Save battery saver scheduled setting to config."""
+    config = load_config()
+    config["battery_saver_scheduled"] = enabled
+    save_config(config)
+
+
+def _load_battery_saver_scheduled() -> bool:
+    """Load battery saver scheduled setting from config."""
+    config = load_config()
+    return config.get("battery_saver_scheduled", False)
+
+
+def _control_backlight(on: bool) -> None:
+    """Turn backlight on or off on Raspberry Pi display."""
+    try:
+        if on:
+            subprocess.run(["vcgencmd", "lcd_power", "1"], check=False)
+        else:
+            subprocess.run(["vcgencmd", "lcd_power", "0"], check=False)
+    except Exception:
+        # vcgencmd may not be available on non-Pi systems
+        pass
+
+
 def init_pygame_display(width: int = 480, height: int = 320, desktop: bool = False, rotation: int = 0):
     if pygame is None:
         raise RuntimeError("pygame is not installed")
@@ -446,6 +491,8 @@ def _create_ui_state() -> dict[str, Any]:
         "toast_message": "",
         "toast_level": "info",
         "toast_expires_at": 0.0,
+        "battery_saver_enabled": False,
+        "battery_saver_scheduled": False,
     }
 
 
@@ -636,10 +683,17 @@ def _get_main_menu_layout(width: int, height: int) -> dict[str, Any]:
     menu_width = min(MAIN_MENU_WIDTH, width - MAIN_MENU_MARGIN)
     menu_x = (width - menu_width) // 2
     menu_y = (height - MAIN_MENU_HEIGHT) // 2
+    
+    # Battery saver button: smaller height, with checkbox to the right
+    battery_button_width = menu_width - 60  # Leave room for checkbox
+    battery_checkbox_size = 20
+    
     return {
         "menu": pygame.Rect(menu_x, menu_y, menu_width, MAIN_MENU_HEIGHT),
         "add": pygame.Rect(menu_x + 20, menu_y + MAIN_MENU_ADD_TOP, menu_width - 40, 40),
         "rotate": pygame.Rect(menu_x + 20, menu_y + MAIN_MENU_ROTATE_TOP, menu_width - 40, 40),
+        "battery": pygame.Rect(menu_x + 20, menu_y + MAIN_MENU_BATTERY_TOP, battery_button_width, 40),
+        "battery_checkbox": pygame.Rect(menu_x + 20 + battery_button_width + 8, menu_y + MAIN_MENU_BATTERY_TOP + 10, battery_checkbox_size, battery_checkbox_size),
         "dismiss": pygame.Rect(menu_x + 20, menu_y + MAIN_MENU_DISMISS_TOP, menu_width - 40, 40),
         "exit": pygame.Rect(menu_x + 20, menu_y + MAIN_MENU_EXIT_TOP, menu_width - 40, 34),
     }
@@ -710,10 +764,11 @@ def _draw_modal_card(surface, rect, title: str) -> None:
     surface.blit(title_surface, (rect.x + 20, rect.y + 15))
 
 
-def _draw_main_menu_overlay(display) -> None:
+def _draw_main_menu_overlay(display, ui_state: dict[str, Any] | None = None) -> None:
     if pygame is None:
         return
 
+    ui_state = ui_state or _create_ui_state()
     surface = display.get_surface()
     width = display.get_width()
     height = display.get_height()
@@ -723,6 +778,22 @@ def _draw_main_menu_overlay(display) -> None:
     _draw_modal_card(surface, layout["menu"], "Menu")
     _draw_button(surface, layout["add"], "Add Secret", (90, 110, 220))
     _draw_button(surface, layout["rotate"], "Rotate Screen", (60, 90, 180))
+    
+    # Battery saver button: toggle color based on state
+    battery_color = (120, 100, 40) if ui_state["battery_saver_enabled"] else (70, 110, 90)
+    battery_label = "Battery Saver: ON" if ui_state["battery_saver_enabled"] else "Battery Saver: OFF"
+    _draw_button(surface, layout["battery"], battery_label, battery_color)
+    
+    # Checkbox for scheduled mode
+    checkbox_rect = layout["battery_checkbox"]
+    checkbox_fill = (50, 150, 50) if ui_state["battery_saver_scheduled"] else (60, 60, 60)
+    pygame.draw.rect(surface, checkbox_fill, checkbox_rect, border_radius=3)
+    pygame.draw.rect(surface, (120, 120, 120), checkbox_rect, width=1, border_radius=3)
+    if ui_state["battery_saver_scheduled"]:
+        # Draw checkmark
+        pygame.draw.line(surface, (255, 255, 255), (checkbox_rect.x + 4, checkbox_rect.centery), (checkbox_rect.centerx - 2, checkbox_rect.bottom - 4), 2)
+        pygame.draw.line(surface, (255, 255, 255), (checkbox_rect.centerx - 2, checkbox_rect.bottom - 4), (checkbox_rect.right - 4, checkbox_rect.y + 3), 2)
+    
     _draw_button(surface, layout["dismiss"], "Dismiss", (50, 120, 60))
     _draw_button(surface, layout["exit"], "Exit Program", (170, 40, 40))
 
@@ -905,6 +976,13 @@ def _handle_ui_events(display, ui_state: dict[str, Any], code_count: int, now: f
                 return _set_ui_mode(ui_state, "add_secret"), True, None
             if layout["rotate"].collidepoint(point):
                 return _set_ui_mode(ui_state, "codes"), True, "rotate"
+            if layout["battery"].collidepoint(point):
+                ui_state["battery_saver_enabled"] = not ui_state["battery_saver_enabled"]
+                return ui_state, True, None
+            if layout["battery_checkbox"].collidepoint(point):
+                ui_state["battery_saver_scheduled"] = not ui_state["battery_saver_scheduled"]
+                _set_battery_saver_scheduled(ui_state["battery_saver_scheduled"])
+                return ui_state, True, None
             if layout["exit"].collidepoint(point):
                 raise SystemExit("Exit requested from touch menu")
             if layout["dismiss"].collidepoint(point) or not layout["menu"].collidepoint(point):
@@ -941,14 +1019,22 @@ def _handle_ui_events(display, ui_state: dict[str, Any], code_count: int, now: f
     return ui_state, False, None
 
 
-def _draw_code_item(surface, item: dict, x: int, y: int, width: int, height: int) -> None:
+def _draw_code_item(surface, item: dict, x: int, y: int, width: int, height: int, landscape_mode: bool = False) -> None:
     label = item["name"]
     code = str(item.get("code", "------"))
     code_color = _parse_hex_color(item.get("colour", "#FFFFFF"), fallback=(255, 255, 255))
-    label_size = _clamp(int(min(height * 0.26, width * 0.16)), 22, 54)
-    code_size = _clamp(int(min(height * 0.40, width * 0.28)), 34, 116)
-    label_y = y
-    code_y = y + _clamp(int(height * 0.34), 24, 52)
+    
+    if landscape_mode:
+        # In landscape mode, make code much larger (~1/3 of width proportionally)
+        label_size = _clamp(int(min(height * 0.20, width * 0.08)), 18, 36)
+        code_size = _clamp(int(min(height * 0.60, width * 0.40)), 50, 220)
+        label_y = y + _clamp(int(height * 0.08), 4, 12)
+        code_y = y + _clamp(int(height * 0.32), 16, 40)
+    else:
+        label_size = _clamp(int(min(height * 0.26, width * 0.16)), 22, 54)
+        code_size = _clamp(int(min(height * 0.40, width * 0.28)), 34, 116)
+        label_y = y
+        code_y = y + _clamp(int(height * 0.34), 24, 52)
 
     _draw_single_line_text(surface, label, x, label_y, width, label_size, (220, 220, 220))
     _draw_single_line_text(surface, code, x, code_y, width, code_size, code_color)
@@ -1028,7 +1114,7 @@ def render_codes(
             column = index % 2
             item_x = padding_x + column * (column_width + column_gap)
             item_y = padding_top + row * (item_height + row_gap)
-            _draw_code_item(surface, item, item_x, item_y, column_width, item_height)
+            _draw_code_item(surface, item, item_x, item_y, column_width, item_height, landscape_mode=True)
     else:
         visible_count = max(1, len(visible_codes))
         item_height = max(48, (content_bottom - padding_top - 6) // visible_count)
@@ -1070,7 +1156,7 @@ def render_codes(
 
     mode = ui_state["mode"]
     if mode == "menu":
-        _draw_main_menu_overlay(display)
+        _draw_main_menu_overlay(display, ui_state)
     elif mode == "add_secret":
         _draw_secret_entry_overlay(display, ui_state)
     elif mode == "confirm_secret":
@@ -1130,8 +1216,12 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
     current_codes = None
     synced_time = False
     ui_state = _create_ui_state()
+    ui_state["battery_saver_scheduled"] = _load_battery_saver_scheduled()
+    
     last_next_refresh = None
     refresh_interval = min(item["step"] for item in codes)
+    last_battery_saver_active = False
+    
     print("Watching TOTP codes. Press Ctrl+C to stop.")
     try:
         while True:
@@ -1151,37 +1241,63 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                 last_codes = current_codes
                 ui_changed = True
 
+            # Determine if battery saver should be active (manual OR scheduled)
+            scheduled_active = ui_state["battery_saver_scheduled"] and _is_battery_saver_scheduled_active()
+            battery_saver_active = ui_state["battery_saver_enabled"] or scheduled_active
+            
+            # Apply/unapply battery saver mode
+            if battery_saver_active != last_battery_saver_active:
+                if battery_saver_active:
+                    _control_backlight(False)
+                else:
+                    _control_backlight(True)
+                last_battery_saver_active = battery_saver_active
+
             next_refresh = min(seconds_until_next_step(item["step"], now) for item in codes)
             should_render = ui_changed
             if next_refresh != last_next_refresh:
                 should_render = True
                 last_next_refresh = next_refresh
 
-            if last_codes is None or next_refresh <= 10 or next_refresh >= 28:
-                if not synced_time:
-                    sync_time()
-                    synced_time = True
-                    now = current_time()
-                current_codes = generate_totps(codes, now=now)
-                if current_codes != last_codes:
-                    write_codes_json(OUTPUT_FILE, current_codes)
-                    last_codes = current_codes
-                    should_render = True
+            # Skip sync and code generation if battery saver is active
+            if battery_saver_active:
+                if should_render and current_codes is not None:
+                    render_codes(
+                        display,
+                        current_codes,
+                        ui_state=ui_state,
+                        seconds_to_refresh=next_refresh,
+                        refresh_interval=refresh_interval,
+                        synced=is_time_synced(),
+                    )
             else:
-                synced_time = False
+                if last_codes is None or next_refresh <= 10 or next_refresh >= 28:
+                    if not synced_time:
+                        sync_time()
+                        synced_time = True
+                        now = current_time()
+                    current_codes = generate_totps(codes, now=now)
+                    if current_codes != last_codes:
+                        write_codes_json(OUTPUT_FILE, current_codes)
+                        last_codes = current_codes
+                        should_render = True
+                else:
+                    synced_time = False
 
-            if should_render and current_codes is not None:
-                render_codes(
-                    display,
-                    current_codes,
-                    ui_state=ui_state,
-                    seconds_to_refresh=next_refresh,
-                    refresh_interval=refresh_interval,
-                    synced=is_time_synced(),
-                )
+                if should_render and current_codes is not None:
+                    render_codes(
+                        display,
+                        current_codes,
+                        ui_state=ui_state,
+                        seconds_to_refresh=next_refresh,
+                        refresh_interval=refresh_interval,
+                        synced=is_time_synced(),
+                    )
+            
             print(
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                 f"{len(codes)} accounts active, next refresh in {next_refresh}s"
+                f"{' [BATTERY SAVER]' if battery_saver_active else ''}"
             )
 
             try:
@@ -1190,6 +1306,7 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                 print("Stopped watching OTP codes.")
                 break
     finally:
+        _control_backlight(True)  # Ensure backlight is on when exiting
         _set_text_input_enabled(False)
         _stop_system_keyboard(ui_state)
 
