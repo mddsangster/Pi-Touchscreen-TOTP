@@ -333,15 +333,94 @@ def _load_battery_saver_scheduled() -> bool:
 
 
 def _control_backlight(on: bool) -> None:
-    """Turn backlight on or off on Raspberry Pi display."""
+    """Turn display backlight on or off using the best available platform hook."""
+    action = "on" if on else "off"
+
+    def _run_quiet(command: list[str]) -> bool:
+        try:
+            result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _write_text(path: Path, value: str) -> bool:
+        try:
+            path.write_text(value)
+            return True
+        except Exception:
+            return False
+
+    # 1) KMS/DPI backlight class devices (common with vc4-kms-dpi-generic overlays).
+    backlight_root = Path("/sys/class/backlight")
+    if backlight_root.exists():
+        for node in sorted(backlight_root.iterdir()):
+            bl_power = node / "bl_power"
+            brightness = node / "brightness"
+            max_brightness = node / "max_brightness"
+
+            if on:
+                changed = False
+                if bl_power.exists():
+                    changed = _write_text(bl_power, "0\n") or changed
+                if brightness.exists() and max_brightness.exists():
+                    try:
+                        max_value = max_brightness.read_text().strip() or "1"
+                    except Exception:
+                        max_value = "1"
+                    changed = _write_text(brightness, f"{max_value}\n") or changed
+                if changed:
+                    print(f"[backlight] {action} via sysfs node {node.name}")
+                    return
+            else:
+                # Prefer power-off bit; fallback to brightness=0.
+                if bl_power.exists() and _write_text(bl_power, "4\n"):
+                    print(f"[backlight] {action} via sysfs bl_power at {node.name}")
+                    return
+                if brightness.exists() and _write_text(brightness, "0\n"):
+                    print(f"[backlight] {action} via sysfs brightness at {node.name}")
+                    return
+
+    # 2) GPIO fallback for overlays using backlight-gpio=18.
+    level = "dh" if on else "dl"
+    if shutil.which("raspi-gpio") is not None:
+        if _run_quiet(["raspi-gpio", "set", "18", "op", level]):
+            print(f"[backlight] {action} via raspi-gpio pin 18")
+            return
+    if shutil.which("pinctrl") is not None:
+        if _run_quiet(["pinctrl", "set", "18", "op", level]):
+            print(f"[backlight] {action} via pinctrl pin 18")
+            return
+
+    # 3) Legacy firmware control on some Raspberry Pi images.
+    if shutil.which("vcgencmd") is not None:
+        if _run_quiet(["vcgencmd", "lcd_power", "1" if on else "0"]):
+            print(f"[backlight] {action} via vcgencmd lcd_power")
+            return
+
+    print(f"[backlight] unable to set {action}: no supported method succeeded")
+
+
+def _get_current_git_head() -> str | None:
+    """Return current git HEAD commit hash for this project, if available."""
+    project_dir = Path(__file__).resolve().parent
     try:
-        if on:
-            subprocess.run(["vcgencmd", "lcd_power", "1"], check=False)
-        else:
-            subprocess.run(["vcgencmd", "lcd_power", "0"], check=False)
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=2,
+        )
     except Exception:
-        # vcgencmd may not be available on non-Pi systems
-        pass
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    head = result.stdout.strip()
+    return head or None
 
 
 def init_pygame_display(width: int = 480, height: int = 320, desktop: bool = False, rotation: int = 0):
@@ -1082,6 +1161,7 @@ def render_codes(
     seconds_to_refresh: int | None = None,
     refresh_interval: int | None = None,
     synced: bool = False,
+    code_update_pending: bool = False,
 ):
     """Render the codes and labels onto the integrated display."""
     if display is None:
@@ -1133,13 +1213,21 @@ def render_codes(
     status_y = content_bottom + max(2, (status_bar_height - status_size) // 2)
     _draw_single_line_text(surface, status_text, padding_x, status_y, width - (padding_x * 2), status_size, (210, 210, 210))
 
+    tags: list[tuple[str, tuple[int, int, int]]] = []
     if synced:
-        tag_text = "(time synced)"
+        tags.append(("(time synced)", (140, 220, 160)))
+    if code_update_pending:
+        tags.append(("(update pending)", (230, 190, 90)))
+
+    if tags:
         tag_size = _clamp(int(status_size * 0.65), 12, 22)
         tag_font = pygame.font.Font(None, tag_size)
-        tag_surface = tag_font.render(tag_text, True, (140, 220, 160))
-        tag_x = width - padding_x - tag_surface.get_width()
-        surface.blit(tag_surface, (tag_x, status_y))
+        tag_x = width - padding_x
+        for tag_text, tag_color in reversed(tags):
+            tag_surface = tag_font.render(tag_text, True, tag_color)
+            tag_x -= tag_surface.get_width()
+            surface.blit(tag_surface, (tag_x, status_y))
+            tag_x -= 10
 
     if seconds_to_refresh is not None and refresh_interval and refresh_interval > 0:
         progress = (refresh_interval - int(seconds_to_refresh)) / float(refresh_interval)
@@ -1221,6 +1309,10 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
     last_next_refresh = None
     refresh_interval = min(item["step"] for item in codes)
     last_battery_saver_active = False
+    startup_git_head = _get_current_git_head()
+    pending_code_update = False
+    last_git_check_at = 0.0
+    git_check_interval = 15.0
     
     print("Watching TOTP codes. Press Ctrl+C to stop.")
     try:
@@ -1228,6 +1320,15 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
             now = current_time()
             _clear_expired_toast(ui_state, now)
             ui_state, ui_changed, ui_action = _handle_ui_events(display, ui_state, len(codes), now)
+
+            if now - last_git_check_at >= git_check_interval:
+                current_git_head = _get_current_git_head()
+                pending_code_update = bool(
+                    startup_git_head
+                    and current_git_head
+                    and startup_git_head != current_git_head
+                )
+                last_git_check_at = now
 
             if ui_action == "rotate" and display is not None:
                 _rotate_display(display)
@@ -1269,6 +1370,7 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                         seconds_to_refresh=next_refresh,
                         refresh_interval=refresh_interval,
                         synced=is_time_synced(),
+                        code_update_pending=pending_code_update,
                     )
             else:
                 if last_codes is None or next_refresh <= 10 or next_refresh >= 28:
@@ -1292,12 +1394,14 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                         seconds_to_refresh=next_refresh,
                         refresh_interval=refresh_interval,
                         synced=is_time_synced(),
+                        code_update_pending=pending_code_update,
                     )
             
             print(
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
                 f"{len(codes)} accounts active, next refresh in {next_refresh}s"
                 f"{' [BATTERY SAVER]' if battery_saver_active else ''}"
+                f"{' [UPDATE PENDING]' if pending_code_update else ''}"
             )
 
             try:
@@ -1327,6 +1431,7 @@ def main(display=None) -> None:
         seconds_to_refresh=next_refresh,
         refresh_interval=refresh_interval,
         synced=is_time_synced(),
+        code_update_pending=False,
     )
     print("Current TOTP codes:")
     for item in current_codes:
