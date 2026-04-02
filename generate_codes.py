@@ -1315,6 +1315,8 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
     git_check_interval = 15.0
     
     print("Watching TOTP codes. Press Ctrl+C to stop.")
+    if ui_state["battery_saver_scheduled"]:
+        print("[battery_saver] scheduled mode enabled in config")
     try:
         while True:
             now = current_time()
@@ -1345,12 +1347,15 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
             # Determine if battery saver should be active (manual OR scheduled)
             scheduled_active = ui_state["battery_saver_scheduled"] and _is_battery_saver_scheduled_active()
             battery_saver_active = ui_state["battery_saver_enabled"] or scheduled_active
+            battery_saver_reason = "manual" if ui_state["battery_saver_enabled"] else "schedule" if scheduled_active else "inactive"
             
             # Apply/unapply battery saver mode
             if battery_saver_active != last_battery_saver_active:
                 if battery_saver_active:
+                    print(f"[battery_saver] activated via {battery_saver_reason}")
                     _control_backlight(False)
                 else:
+                    print("[battery_saver] deactivated")
                     _control_backlight(True)
                 last_battery_saver_active = battery_saver_active
 
@@ -1362,6 +1367,11 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
 
             # Skip sync and code generation if battery saver is active
             if battery_saver_active:
+                if current_codes is None:
+                    current_codes = generate_totps(codes, now=now)
+                    last_codes = current_codes
+                    write_codes_json(OUTPUT_FILE, current_codes)
+                    should_render = True
                 if should_render and current_codes is not None:
                     render_codes(
                         display,
