@@ -10,7 +10,7 @@ SERVICE_NAME="${OTP_SERVICE_NAME:-otp-codes.service}"
 
 cd "$PROJECT_DIR"
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [ ! -d "$PROJECT_DIR/.git" ]; then
   echo "Not a git repository: $PROJECT_DIR"
   exit 1
 fi
