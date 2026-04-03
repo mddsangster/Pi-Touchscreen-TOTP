@@ -15,6 +15,31 @@ if [ ! -d "$PROJECT_DIR/.git" ]; then
   exit 1
 fi
 
+ensure_git_permissions() {
+  if [ -z "$GIT_USER" ] || [ "$(id -u)" -ne 0 ]; then
+    return 0
+  fi
+
+  local git_dir="$PROJECT_DIR/.git"
+  local objects_dir="$git_dir/objects"
+  local git_dir_quoted
+  local objects_dir_quoted
+
+  if [ ! -d "$objects_dir" ]; then
+    return 0
+  fi
+
+  printf -v git_dir_quoted '%q' "$git_dir"
+  printf -v objects_dir_quoted '%q' "$objects_dir"
+
+  if runuser -l "$GIT_USER" -c "test -w $git_dir_quoted && test -w $objects_dir_quoted"; then
+    return 0
+  fi
+
+  echo "[autopull] Repairing git ownership in $git_dir for user $GIT_USER"
+  chown -R "$GIT_USER:$GIT_USER" "$git_dir"
+}
+
 git_cmd() {
   if [ -n "$GIT_USER" ] && [ "$(id -u)" -eq 0 ]; then
     local git_command
@@ -28,6 +53,7 @@ git_cmd() {
 }
 
 echo "[autopull] Fetching $REMOTE/$BRANCH"
+ensure_git_permissions
 git_cmd fetch "$REMOTE" "$BRANCH"
 
 LOCAL_SHA="$(git_cmd rev-parse HEAD)"
