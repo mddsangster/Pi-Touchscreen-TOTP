@@ -4,7 +4,14 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+if [ "$SCRIPT_PATH" = "-bash" ]; then
+  echo "Run this as a script file, not pasted line-by-line."
+  echo "Example: sudo bash ~/Pi-Touchscreen-TOTP/scripts/repair_git_permissions.sh"
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname -- "$SCRIPT_PATH")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -14,6 +21,11 @@ fi
 
 # Detect repo owner from the project directory itself
 REPO_USER="$(stat -c '%U' "$PROJECT_DIR")"
+
+if [ ! -d "$PROJECT_DIR/.git" ]; then
+  echo "Not a git repository: $PROJECT_DIR"
+  exit 1
+fi
 
 echo "Repairing .git ownership -> $REPO_USER in $PROJECT_DIR"
 chown -R "$REPO_USER:$REPO_USER" "$PROJECT_DIR/.git"

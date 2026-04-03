@@ -79,11 +79,15 @@ Notes:
 
 ## Configuration
 
-Settings can be controlled either through `args.json` or command-line flags. The config file is simpler for persistent settings on the Pi.
+Settings can be controlled through `default.config` (repo defaults), `args.config` (local device overrides), or command-line flags.
 
-### args.json
+### default.config and args.config
 
-Create or edit `args.json` with:
+`default.config` is committed to git and should contain safe shared defaults.
+
+`args.config` is local-only (gitignored) and should contain device-specific overrides.
+
+Create or edit `args.config` with:
 
 ```json
 {
@@ -94,7 +98,8 @@ Create or edit `args.json` with:
   "display_rotation": 0,
   "ntp_server": "pool.ntp.org",
   "ntp_timeout": 5.0,
-  "battery_saver_scheduled": false
+  "battery_saver_scheduled": false,
+  "battery_saver_wake_seconds": 30
 }
 ```
 
@@ -107,8 +112,9 @@ Create or edit `args.json` with:
 - `ntp_server` (string): NTP server for time sync
 - `ntp_timeout` (float): Timeout for NTP requests
 - `battery_saver_scheduled` (bool): Enable the automatic battery-saver schedule (6 PM – 6 AM Mon–Fri, all day Sat–Sun). Can also be toggled from the on-screen menu; changes save immediately.
+- `battery_saver_wake_seconds` (float): When battery saver is active, a tap wakes the backlight for this many seconds before turning off again.
 
-Command-line flags override config file values.
+Load order is: `default.config` -> `args.config` -> command-line flags.
 
 ## Running manually
 
@@ -144,10 +150,10 @@ python3 generate_codes.py --watch --pygame --desktop
 
 ### Changing Settings Without Redeployment
 
-On the Raspberry Pi, simply edit `args.json` and restart the service:
+On the Raspberry Pi, simply edit `args.config` and restart the service:
 
 ```bash
-nano args.json
+nano args.config
 sudo systemctl restart otp-codes.service
 ```
 
@@ -160,7 +166,7 @@ Tap anywhere on the display to open the menu. Available actions:
 | Button | Action |
 |---|---|
 | **Add Secret** | Enter a new TOTP secret using the built-in keypad or system keyboard |
-| **Rotate Screen** | Cycle through 0 / 90 / 180 / 270° and save to `args.json` |
+| **Rotate Screen** | Cycle through 0 / 90 / 180 / 270° and save to `args.config` |
 | **Battery Saver: OFF / ON** | Toggle battery saver immediately; turns off backlight and pauses NTP sync |
 | ☐ (checkbox next to Battery Saver) | Enable/disable the automatic schedule for battery saver |
 | **Dismiss** | Close the menu |
@@ -187,7 +193,7 @@ The backlight is always restored when the application exits.
 - Monday – Friday: 6:00 PM to 6:00 AM
 - Saturday and Sunday: all day
 
-Enable it by ticking the checkbox next to the Battery Saver button in the menu, or set `"battery_saver_scheduled": true` in `args.json`.
+Enable it by ticking the checkbox next to the Battery Saver button in the menu, or set `"battery_saver_scheduled": true` in `args.config`.
 
 ## Display Layout
 

@@ -31,7 +31,9 @@ except ImportError:
 
 SECRETS_FILE = Path("secrets.json")
 OUTPUT_FILE = Path("codes.json")
-CONFIG_FILE = Path("args.json")
+DEFAULT_CONFIG_FILE = Path("default.config")
+LOCAL_CONFIG_FILE = Path("args.config")
+LEGACY_CONFIG_FILE = Path("args.json")
 ACCOUNTS_KEY = "accounts"
 MAX_CODES = 4
 DEFAULT_DIGITS = 6
@@ -276,29 +278,45 @@ def _try_pygame_display(width: int, height: int):
     return screen
 
 
-def load_config() -> dict:
-    if not CONFIG_FILE.exists():
+def _load_json_object(path: Path, *, label: str) -> dict:
+    if not path.exists():
         return {}
     try:
-        config = json.loads(CONFIG_FILE.read_text())
+        data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError) as exc:
-        print(f"Warning: Could not load {CONFIG_FILE}: {exc}")
+        print(f"Warning: Could not load {label} ({path}): {exc}")
         return {}
-    if not isinstance(config, dict):
-        print(f"Warning: Expected {CONFIG_FILE} to contain a JSON object")
+    if not isinstance(data, dict):
+        print(f"Warning: Expected {label} ({path}) to contain a JSON object")
         return {}
+    return data
+
+
+def load_config() -> dict:
+    config: dict[str, Any] = {}
+    config.update(_load_json_object(DEFAULT_CONFIG_FILE, label="default config"))
+
+    if LOCAL_CONFIG_FILE.exists():
+        config.update(_load_json_object(LOCAL_CONFIG_FILE, label="local config"))
+    elif LEGACY_CONFIG_FILE.exists():
+        config.update(_load_json_object(LEGACY_CONFIG_FILE, label="legacy config"))
+        print(
+            f"Warning: Using legacy {LEGACY_CONFIG_FILE}. "
+            f"Create {LOCAL_CONFIG_FILE} to store local settings."
+        )
+
     return config
 
 
 def save_config(config: dict) -> None:
-    CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+    LOCAL_CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
 
 
 def save_display_rotation(rotation: int) -> None:
     config = load_config()
     config["display_rotation"] = rotation % 360
     save_config(config)
-    print(f"Saved display_rotation={rotation % 360} to {CONFIG_FILE.resolve()}")
+    print(f"Saved display_rotation={rotation % 360} to {LOCAL_CONFIG_FILE.resolve()}")
 
 
 def _is_battery_saver_scheduled_active() -> bool:
@@ -1474,7 +1492,7 @@ def main(display=None) -> None:
 
 if __name__ == "__main__":
     config = load_config()
-    print(f"Loaded config from {CONFIG_FILE}")
+    print(f"Loaded config from {DEFAULT_CONFIG_FILE} + {LOCAL_CONFIG_FILE} (when present)")
 
     parser = argparse.ArgumentParser(description="Generate and optionally watch TOTP codes for configured accounts.")
     parser.add_argument(
