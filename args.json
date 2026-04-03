@@ -6,5 +6,6 @@
   "display_rotation": 0,
   "ntp_server": "pool.ntp.org",
   "ntp_timeout": 5.0,
-  "battery_saver_scheduled": false
+  "battery_saver_scheduled": false,
+  "battery_saver_wake_seconds": 30
 }

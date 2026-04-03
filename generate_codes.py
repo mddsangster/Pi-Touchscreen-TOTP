@@ -572,6 +572,7 @@ def _create_ui_state() -> dict[str, Any]:
         "toast_expires_at": 0.0,
         "battery_saver_enabled": False,
         "battery_saver_scheduled": False,
+        "battery_saver_wake_expires_at": 0.0,
     }
 
 
@@ -1008,7 +1009,7 @@ def _event_to_pixel_pos(display, event) -> tuple[int, int] | None:
     return None
 
 
-def _handle_ui_events(display, ui_state: dict[str, Any], code_count: int, now: float):
+def _handle_ui_events(display, ui_state: dict[str, Any], code_count: int, now: float, *, battery_saver_active: bool = False, battery_saver_wake_seconds: float = 30.0):
     if pygame is None or display is None:
         return ui_state, False, None
 
@@ -1046,6 +1047,12 @@ def _handle_ui_events(display, ui_state: dict[str, Any], code_count: int, now: f
             continue
 
         if mode == "codes":
+            if battery_saver_active:
+                currently_waking = ui_state.get("battery_saver_wake_expires_at", 0.0) > now
+                ui_state["battery_saver_wake_expires_at"] = now + battery_saver_wake_seconds
+                if currently_waking:
+                    return _set_ui_mode(ui_state, "menu"), True, None
+                return ui_state, True, None
             return _set_ui_mode(ui_state, "menu"), True, None
 
         if mode == "menu":
@@ -1309,6 +1316,8 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
     last_next_refresh = None
     refresh_interval = min(item["step"] for item in codes)
     last_battery_saver_active = False
+    last_backlight_on = True
+    battery_saver_wake_seconds = float(load_config().get("battery_saver_wake_seconds", 30.0))
     startup_git_head = _get_current_git_head()
     pending_code_update = False
     last_git_check_at = 0.0
@@ -1321,7 +1330,13 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
         while True:
             now = current_time()
             _clear_expired_toast(ui_state, now)
-            ui_state, ui_changed, ui_action = _handle_ui_events(display, ui_state, len(codes), now)
+            _sched_pre = ui_state["battery_saver_scheduled"] and _is_battery_saver_scheduled_active()
+            _bsaver_pre = ui_state["battery_saver_enabled"] or _sched_pre
+            ui_state, ui_changed, ui_action = _handle_ui_events(
+                display, ui_state, len(codes), now,
+                battery_saver_active=_bsaver_pre,
+                battery_saver_wake_seconds=battery_saver_wake_seconds,
+            )
 
             if now - last_git_check_at >= git_check_interval:
                 current_git_head = _get_current_git_head()
@@ -1349,15 +1364,24 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
             battery_saver_active = ui_state["battery_saver_enabled"] or scheduled_active
             battery_saver_reason = "manual" if ui_state["battery_saver_enabled"] else "schedule" if scheduled_active else "inactive"
             
-            # Apply/unapply battery saver mode
+            # Log battery saver state transitions
             if battery_saver_active != last_battery_saver_active:
                 if battery_saver_active:
                     print(f"[battery_saver] activated via {battery_saver_reason}")
-                    _control_backlight(False)
                 else:
                     print("[battery_saver] deactivated")
-                    _control_backlight(True)
                 last_battery_saver_active = battery_saver_active
+
+            # Backlight: off during battery saver, unless temporarily woken by a tap
+            battery_saver_waking = battery_saver_active and ui_state.get("battery_saver_wake_expires_at", 0.0) > now
+            backlight_on = not battery_saver_active or battery_saver_waking
+            if backlight_on != last_backlight_on:
+                _control_backlight(backlight_on)
+                if not backlight_on:
+                    print("[battery_saver] backlight off (wake expired)")
+                elif battery_saver_waking:
+                    print(f"[battery_saver] backlight on ({battery_saver_wake_seconds:.0f}s tap wake)")
+                last_backlight_on = backlight_on
 
             next_refresh = min(seconds_until_next_step(item["step"], now) for item in codes)
             should_render = ui_changed
