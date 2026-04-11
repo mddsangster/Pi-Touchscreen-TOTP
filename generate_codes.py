@@ -1407,8 +1407,9 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                 should_render = True
                 last_next_refresh = next_refresh
 
-            # Skip sync and code generation if battery saver is active
-            if battery_saver_active:
+            # Pause code generation only when battery saver is fully active and screen is not in tap-wake window.
+            generation_paused = battery_saver_active and not battery_saver_waking
+            if generation_paused:
                 if current_codes is None:
                     current_codes = generate_totps(codes, now=now)
                     last_codes = current_codes
@@ -1426,7 +1427,8 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                     )
             else:
                 if last_codes is None or next_refresh <= 10 or next_refresh >= 28:
-                    if not synced_time:
+                    # During tap-wake while battery saver is still active, refresh codes but keep sync disabled.
+                    if not battery_saver_active and not synced_time:
                         sync_time()
                         synced_time = True
                         now = current_time()
@@ -1436,7 +1438,8 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                         last_codes = current_codes
                         should_render = True
                 else:
-                    synced_time = False
+                    if not battery_saver_active:
+                        synced_time = False
 
                 if should_render and current_codes is not None:
                     render_codes(
