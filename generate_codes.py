@@ -1187,6 +1187,7 @@ def render_codes(
     refresh_interval: int | None = None,
     synced: bool = False,
     code_update_pending: bool = False,
+    battery_saver_wake: bool = False,
 ):
     """Render the codes and labels onto the integrated display."""
     if display is None:
@@ -1243,6 +1244,8 @@ def render_codes(
         tags.append(("(time synced)", (140, 220, 160)))
     if code_update_pending:
         tags.append(("(update pending)", (230, 190, 90)))
+    if battery_saver_wake:
+        tags.append(("(wake)", (120, 190, 255)))
 
     if tags:
         tag_size = _clamp(int(status_size * 0.65), 12, 22)
@@ -1424,6 +1427,7 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                         refresh_interval=refresh_interval,
                         synced=is_time_synced(),
                         code_update_pending=pending_code_update,
+                        battery_saver_wake=battery_saver_waking,
                     )
             else:
                 if last_codes is None or next_refresh <= 10 or next_refresh >= 28:
@@ -1450,6 +1454,7 @@ def watch_codes(poll_interval: float = 1.0, display=None) -> None:
                         refresh_interval=refresh_interval,
                         synced=is_time_synced(),
                         code_update_pending=pending_code_update,
+                        battery_saver_wake=battery_saver_waking,
                     )
             
             print(
@@ -1487,6 +1492,7 @@ def main(display=None) -> None:
         refresh_interval=refresh_interval,
         synced=is_time_synced(),
         code_update_pending=False,
+        battery_saver_wake=False,
     )
     print("Current TOTP codes:")
     for item in current_codes:
